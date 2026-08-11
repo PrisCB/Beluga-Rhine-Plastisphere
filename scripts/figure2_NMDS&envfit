@@ -1,0 +1,251 @@
+## ============================================================
+##  Beluga Project — Figure 2
+##  Panel A: Full ASV NMDS with envfit vectors (Plastic vs Water)
+##  Panel B: Bootstrap envfit R² comparison (MT vs ST), NO3+NO2/Si/PO4
+##
+##  Objects are named fig2_panel_A / fig2_panel_B (not panel_A/panel_B)
+##  since the Figure 1 script uses those generic names for its own
+##  panels -- keep this distinction if both scripts run in the same
+##  session.
+## ============================================================
+
+library(ggplot2)
+library(dplyr)
+library(ggrepel)
+library(tibble)
+library(vegan)
+
+hab_cols <- c("Water" = "#0072B2", "Plastic" = "#D45B1B")
+
+# ── 1. Compute habitat centroids (vector origins) ─────────────
+centroids <- scores_full %>%
+  group_by(Habitat) %>%
+  summarise(cx = mean(NMDS1), cy = mean(NMDS2), .groups = "drop")
+
+mt_centroid <- centroids %>% filter(Habitat == "Plastic")
+st_centroid <- centroids %>% filter(Habitat == "Water")
+
+# ── 2. Extract envfit vectors ─────────────────────────────────
+# filter(sig) excludes PO4 from the NMDS vector plot itself (PO4
+# p~0.067-0.075, not significant at p<0.05) -- matches the approved
+# Figure 2 caption ("MT shows ONE significant vector only: NO3+NO2").
+# PO4 is shown in Panel B (bootstrap R² comparison) instead, alongside
+# its p-value rather than implied as a significant driver.
+mt_vec <- as.data.frame(scores(fit_MT_nutrients, display = "vectors")) %>%
+  rownames_to_column("variable") %>%
+  mutate(
+    r2      = fit_MT_nutrients$vectors$r[variable],
+    pval    = fit_MT_nutrients$vectors$pvals[variable],
+    sig     = pval < 0.05,
+    label   = case_when(
+      variable == "NO3_log" ~ "NO₃⁻+NO₂⁻",
+      variable == "Si_log"  ~ "Si",
+      variable == "PO4_log" ~ "PO₄³⁻",
+      TRUE ~ variable
+    )
+  ) %>%
+  filter(sig)
+
+st_vec <- as.data.frame(scores(fit_ST_nutrients, display = "vectors")) %>%
+  rownames_to_column("variable") %>%
+  mutate(
+    r2      = fit_ST_nutrients$vectors$r[variable],
+    pval    = fit_ST_nutrients$vectors$pvals[variable],
+    sig     = pval < 0.05,
+    label   = case_when(
+      variable == "NO3_log" ~ "NO₃⁻+NO₂⁻",
+      variable == "Si_log"  ~ "Si",
+      variable == "PO4_log" ~ "PO₄³⁻",
+      TRUE ~ variable
+    )
+  ) %>%
+  filter(sig)
+
+# ── 3. Scale vectors by R² (proportional length), anchored at centroid ──
+scale_factor <- 1.4  # adjust if arrows too long/short
+
+mt_vec <- mt_vec %>%
+  mutate(
+    xstart = mt_centroid$cx,
+    ystart = mt_centroid$cy,
+    xend   = mt_centroid$cx + NMDS1 * r2 * scale_factor,
+    yend   = mt_centroid$cy + NMDS2 * r2 * scale_factor,
+    xlabel = mt_centroid$cx + NMDS1 * r2 * scale_factor * 1.35,
+    ylabel = mt_centroid$cy + NMDS2 * r2 * scale_factor * 1.35
+  )
+
+st_vec <- st_vec %>%
+  mutate(
+    xstart = st_centroid$cx,
+    ystart = st_centroid$cy,
+    xend   = st_centroid$cx + NMDS1 * r2 * scale_factor,
+    yend   = st_centroid$cy + NMDS2 * r2 * scale_factor,
+    xlabel = st_centroid$cx + NMDS1 * r2 * scale_factor * 1.1,
+    ylabel = st_centroid$cy + NMDS2 * r2 * scale_factor * 1.1
+  )
+
+# ── 4. Build Panel A ────────────────────────────────────────────
+fig2_panel_A <- ggplot(scores_full, aes(NMDS1, NMDS2, colour = Habitat)) +
+  geom_point(size = 3.4, alpha = 0.95) +
+  ggrepel::geom_text_repel(
+    aes(label = Station),
+    size = 3, max.overlaps = Inf,
+    box.padding = 0.25, point.padding = 0.15,
+    segment.alpha = 0.30, show.legend = FALSE
+  ) +
+  # MT (plastisphere) vectors — orange solid
+  geom_segment(
+    data = mt_vec,
+    aes(x = xstart, y = ystart, xend = xend, yend = yend),
+    inherit.aes = FALSE,
+    arrow = arrow(length = unit(0.2, "cm"), type = "closed"),
+    colour = "#D45B1B", linewidth = 0.8, linetype = "solid"
+  ) +
+  geom_text(
+    data = mt_vec,
+    aes(x = xlabel, y = ylabel, label = label),
+    inherit.aes = FALSE,
+    colour = "#D45B1B", size = 2.8, fontface = "italic"
+  ) +
+  # ST (water) vectors — blue solid
+  geom_segment(
+    data = st_vec,
+    aes(x = xstart, y = ystart, xend = xend, yend = yend),
+    inherit.aes = FALSE,
+    arrow = arrow(length = unit(0.2, "cm"), type = "closed"),
+    colour = "#0072B2", linewidth = 0.8, linetype = "solid"
+  ) +
+  geom_text(
+    data = st_vec,
+    aes(x = xlabel, y = ylabel, label = label),
+    inherit.aes = FALSE,
+    colour = "#0072B2", size = 2.8, fontface = "italic"
+  ) +
+  scale_colour_manual(values = hab_cols, name = "Habitat") +
+  labs(
+    x = "NMDS1", y = "NMDS2",
+    subtitle = paste0("Taxonomic (ASV)  |  Stress = ",
+                      signif(nmds_full$stress, 3))
+  ) +
+  theme_classic(base_size = 11, base_family = "sans") +
+  theme(
+    legend.position = "bottom",
+    plot.subtitle   = element_text(size = 9, colour = "grey40")
+  )
+
+print(fig2_panel_A)
+
+## ============================================================
+##  Panel B — Bootstrap envfit R² comparison (MT vs ST)
+##  Facets: NO3+NO2, Si, PO4
+## ============================================================
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+hab_cols <- c("Water" = "#0072B2", "Plastic" = "#D45B1B")
+
+# ── 1. Build long-format dataframe ───────────────────────────
+# Requires r2_MT_NO3/r2_ST_NO3, r2_MT_Si/r2_ST_Si, r2_MT_PO4/r2_ST_PO4
+# (5,000 bootstrap-resampled R² values each) already in the session,
+# produced by the envfit bootstrap loop in BelugaNutrientPlastics.R.
+boot_df <- data.frame(
+  NO3_Plastic = r2_MT_NO3,
+  NO3_Water   = r2_ST_NO3,
+  Si_Plastic  = r2_MT_Si,
+  Si_Water    = r2_ST_Si,
+  PO4_Plastic = r2_MT_PO4,
+  PO4_Water   = r2_ST_PO4
+) %>%
+  pivot_longer(
+    everything(),
+    names_to  = c("Nutrient", "Habitat"),
+    names_sep = "_",
+    values_to = "R2"
+  ) %>%
+  mutate(
+    Habitat  = factor(Habitat,  levels = c("Water", "Plastic")),
+    Nutrient = factor(Nutrient, levels = c("NO3", "Si", "PO4"),
+                      labels = c("NO₃⁻+NO₂⁻", "Si", "PO₄³⁻"))
+  )
+
+# ── 2. Observed R² points ────────────────────────────────────
+# Values per approved Section 2 text / Table S1:
+# NO3: MT R²=0.638 p=0.012 (sig); ST R²=0.815 p=0.004 (sig)
+# Si:  MT R²=0.477 p=0.065;       ST R²=0.777 p=0.005 (sig)
+# PO4: MT R²=0.469 p=0.067;       ST R²=0.585 p=0.075
+observed <- data.frame(
+  Nutrient = factor(c("NO₃⁻+NO₂⁻", "NO₃⁻+NO₂⁻",
+                      "Si", "Si",
+                      "PO₄³⁻", "PO₄³⁻"),
+                    levels = c("NO₃⁻+NO₂⁻", "Si", "PO₄³⁻")),
+  Habitat  = factor(c("Water", "Plastic", "Water", "Plastic", "Water", "Plastic"),
+                    levels = c("Water", "Plastic")),
+  R2       = c(0.815, 0.638, 0.777, 0.477, 0.585, 0.469)
+)
+
+# ── 3. Build plot ─────────────────────────────────────────────
+r2_MT_PO4 <- readRDS("r2_MT_PO4.rds")
+r2_ST_PO4 <- readRDS("r2_ST_PO4.rds")
+
+fig2_panel_B <- ggplot(boot_df, aes(x = Habitat, y = R2, fill = Habitat)) +
+  geom_violin(alpha = 0.85, trim = TRUE, scale = "width", width = 1.0,
+              bounds = c(-0.1, 1.2), adjust = 1.6, colour = NA) +
+  geom_boxplot(width = 0.18, outlier.shape = NA,
+               fill = "white", alpha = 0.6,
+               colour = "grey25", linewidth = 0.45) +
+  geom_point(
+    data = observed,
+    aes(x = Habitat, y = R2),
+    inherit.aes = FALSE,
+    shape = 18,
+    size = 3.5,
+    colour = "grey15"
+  ) +
+  scale_fill_manual(values = hab_cols, guide = "none") +
+  scale_x_discrete(expand = expansion(add = 1)) +
+  scale_y_continuous(breaks = c(0.0, 0.25, 0.5, 0.75, 1.0, 1.25))+
+  facet_wrap(~ Nutrient, nrow = 1) +
+  labs(
+    x = NULL,
+    y = "Bootstrap envfit R²"
+  ) +
+  theme_minimal(base_size = 11, base_family = "sans") +
+  theme(
+    strip.text        = element_text(size = 10, face = "italic", colour = "grey20"),
+    plot.subtitle     = element_text(size = 9, colour = "grey40"),
+    axis.text.x       = element_text(size = 10, colour = "grey20"),
+    axis.text.y       = element_text(size = 9, colour = "grey30"),
+    axis.title.y      = element_text(size = 10, colour = "grey20"),
+    panel.spacing     = unit(0.5, "lines"),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.y = element_line(colour = "grey90", linewidth = 0.3),
+    axis.line.x        = element_line(colour = "grey40", linewidth = 0.3)
+  )
+fig2_panel_B
+
+## ============================================================
+##  Compose Panels A and B
+## ============================================================
+
+library(cowplot)
+
+fig2 <- plot_grid(
+  fig2_panel_A, fig2_panel_B,
+  nrow        = 1,
+  align       = "hv",
+  axis        = "tb",
+  labels      = c("A", "B"),
+  label_size  = 12,
+  label_fontface = "bold",
+  rel_widths  = c(1, 1.2)  # widened slightly for B's third facet
+)
+
+ggsave("Figure2_gradient_coupling.pdf",
+       plot = fig2, width = 26, height = 10, units = "cm", device = cairo_pdf)
+ggsave("Figure2_gradient_coupling.png",
+       plot = fig2, width = 26, height = 10, units = "cm", dpi = 300)
+
+message("Saved: Figure2_gradient_coupling.pdf / .png")
