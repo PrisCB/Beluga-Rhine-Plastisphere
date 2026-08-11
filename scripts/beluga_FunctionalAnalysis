@@ -1,0 +1,283 @@
+###############################################
+# Beluga Project — MAG Functional Analysis (120-MAG set)
+# Community-weighted KO functional potential, header-level aggregation,
+# PERMANOVA + betadisper (Plastic vs Water), per-header dispersion screen,
+# aerobic/anaerobic corrin ring synthesis test.
+#
+# MAG QC filter: Completeness >= 70% AND Contamination <= 10% -> 120 MAGs.
+###############################################
+
+library(dplyr)
+library(tidyr)
+library(vegan)
+library(tibble)
+
+## -----------------------------
+## STEP 0: Build rel_mat_filt (120 MAGs)
+## -----------------------------
+mag_qc_filt_70 <- mag_qc %>%
+  dplyr::mutate(qc_pass = Completeness >= 70 & Contamination <= 10)
+
+qc_pass_ids_70 <- mag_qc_filt_70 %>%
+  dplyr::filter(qc_pass) %>%
+  dplyr::pull(MAG)
+
+presence_count <- rowSums(rel_mat > 0, na.rm = TRUE)
+max_rel_abund  <- apply(rel_mat, 1, max, na.rm = TRUE)
+
+keep_mag_70 <- rownames(rel_mat) %in% qc_pass_ids_70 &
+  presence_count >= 1 &
+  max_rel_abund  >= 0.001
+
+rel_mat_filt <- rel_mat[keep_mag_70, , drop = FALSE]
+cat("rel_mat_filt dim (should be 120 x 14):", dim(rel_mat_filt), "\n")
+stopifnot(nrow(rel_mat_filt) == 120)
+
+## -----------------------------
+## STEP 1: Load metabolism summary, restrict to the 120 MAGs
+## -----------------------------
+KO_df <- Beluga_metabolism_summary
+
+meta_cols <- c("gene_id", "gene_description", "module", "header", "subheader")
+meta_cols <- intersect(meta_cols, names(KO_df))
+mag_cols_KO <- setdiff(names(KO_df), meta_cols)
+
+mag_120 <- rownames(rel_mat_filt)
+cat("N MAGs in rel_mat_filt:", length(mag_120), "\n")
+
+overlap <- intersect(mag_cols_KO, mag_120)
+cat("N MAGs found in both KO table and rel_mat:", length(overlap), "\n")
+
+missing_from_KO <- setdiff(mag_120, mag_cols_KO)
+cat("N of the 120 MAGs missing from KO table:", length(missing_from_KO), "\n")
+if (length(missing_from_KO) > 0) print(missing_from_KO)
+
+KO_120 <- KO_df[, c(meta_cols, mag_120)]
+cat("KO_120 dim:", dim(KO_120)[1], "rows x", dim(KO_120)[2], "cols\n")
+stopifnot(all(colnames(KO_120[, mag_120]) == mag_120))
+
+## -----------------------------
+## STEP 2: Build KO x MAG and Station x MAG matrices
+## -----------------------------
+KO_mat <- KO_120[, mag_120]              # KO x MAG
+RA_mat <- t(rel_mat_filt)                # Station x MAG
+
+cat("KO_mat dim:", dim(KO_mat), "\n")
+cat("RA_mat dim:", dim(RA_mat), "\n")
+stopifnot(all(colnames(RA_mat) == colnames(KO_mat)))
+
+KO_mat_num <- apply(KO_mat, 2, as.numeric)
+KO_mat_num <- as.matrix(KO_mat_num)
+RA_mat <- as.matrix(RA_mat)
+mode(RA_mat) <- "numeric"
+
+## -----------------------------
+## STEP 3: Community-weighted functional matrix (Station x KO)
+## -----------------------------
+func_station <- RA_mat %*% t(KO_mat_num)
+cat("func_station dim (stations x KOs):", dim(func_station), "\n")
+
+## -----------------------------
+## STEP 4: Build sample metadata aligned to func_station
+## -----------------------------
+meta_func <- sample_meta %>%
+  dplyr::select(SampleID_cov, SampleType, SampleNum, River_Km_m) %>%
+  dplyr::rename(SampleID = SampleID_cov, Habitat = SampleType, Station = SampleNum) %>%
+  dplyr::filter(SampleID %in% rownames(func_station))
+
+meta_func <- meta_func[match(rownames(func_station), meta_func$SampleID), ]
+stopifnot(all(meta_func$SampleID == rownames(func_station)))
+
+cat("\n=== Habitat counts in meta_func ===\n")
+print(table(meta_func$Habitat, useNA = "ifany"))
+
+## -----------------------------
+## STEP 5: PERMANOVA -- Habitat effect on functional potential (KO-level)
+## -----------------------------
+set.seed(123)
+adonis_func <- adonis2(
+  func_station ~ Habitat,
+  data = meta_func,
+  method = "bray",
+  permutations = 9999,
+  strata = meta_func$Station
+)
+cat("\n=== PERMANOVA: functional potential ~ Habitat ===\n")
+print(adonis_func)
+
+## Station effect, for comparison
+adonis_station <- adonis2(func_station ~ Station, data = meta_func,
+                          permutations = 9999, method = "bray")
+cat("\n=== PERMANOVA: functional potential ~ Station ===\n")
+print(adonis_station)
+
+## -----------------------------
+## STEP 6: Betadisper -- functional dispersion, Plastic vs Water
+## -----------------------------
+dist_func <- vegdist(func_station, method = "bray")
+bd <- betadisper(dist_func, meta_func$Habitat)
+
+cat("\n=== Betadisper ANOVA ===\n")
+print(anova(bd))
+cat("\n=== Betadisper permutest ===\n")
+print(permutest(bd, permutations = 9999))
+cat("\n=== Mean distance to centroid by habitat ===\n")
+print(tapply(bd$distances, meta_func$Habitat, mean))
+
+## -----------------------------
+## STEP 7: Header-level aggregation (collapse KOs to functional categories)
+## -----------------------------
+colnames(func_station) <- KO_120$gene_id
+cat("\nN duplicated gene_id in KO_120:", sum(duplicated(KO_120$gene_id)), "\n")
+
+ko_map <- KO_120 %>%
+  dplyr::group_by(gene_id) %>%
+  dplyr::summarise(
+    header    = dplyr::first(na.omit(header)),
+    subheader = dplyr::first(na.omit(subheader)),
+    module    = dplyr::first(na.omit(module)),
+    .groups = "drop"
+  )
+stopifnot(sum(duplicated(ko_map$gene_id)) == 0)
+
+colnames(func_station) <- make.unique(colnames(func_station))
+
+func_long <- as.data.frame(func_station) %>%
+  tibble::rownames_to_column("SampleID") %>%
+  tidyr::pivot_longer(cols = -SampleID, names_to = "gene_id", values_to = "abundance") %>%
+  dplyr::mutate(gene_id_base = sub("\\..*$", "", gene_id))
+
+func_long2 <- func_long %>%
+  dplyr::left_join(ko_map, by = c("gene_id_base" = "gene_id"))
+cat("N unmatched (NA header) after join:", sum(is.na(func_long2$header)), "\n")
+
+func_header <- func_long2 %>%
+  dplyr::group_by(SampleID, header) %>%
+  dplyr::summarise(total_abundance = sum(abundance, na.rm = TRUE), .groups = "drop")
+
+func_header_mat <- func_header %>%
+  tidyr::pivot_wider(names_from = header, values_from = total_abundance, values_fill = 0) %>%
+  tibble::column_to_rownames("SampleID") %>%
+  as.matrix()
+
+cat("func_header_mat dim:", dim(func_header_mat), "\n")
+
+## -----------------------------
+## STEP 8: PERMANOVA + betadisper at HEADER level
+## -----------------------------
+adonis_header <- adonis2(func_header_mat ~ Habitat, data = meta_func,
+                         method = "bray", permutations = 9999,
+                         strata = meta_func$Station)
+cat("\n=== PERMANOVA: header-level functional potential ~ Habitat ===\n")
+print(adonis_header)
+
+dist_header <- vegdist(func_header_mat, method = "bray")
+bd_header <- betadisper(dist_header, meta_func$Habitat)
+
+cat("\n=== Header-level betadisper ANOVA ===\n")
+print(anova(bd_header))
+cat("\n=== Header-level betadisper permutest ===\n")
+print(permutest(bd_header, permutations = 9999))
+cat("\n=== Header-level mean distance to centroid ===\n")
+print(tapply(bd_header$distances, meta_func$Habitat, mean))
+
+## -----------------------------
+## STEP 9: Per-header driver screen (FDR-corrected)
+## -----------------------------
+ko_by_header <- ko_map %>%
+  dplyr::filter(gene_id %in% func_long$gene_id_base) %>%
+  dplyr::group_by(header) %>%
+  dplyr::summarise(KOs = list(unique(gene_id)), nKOs = dplyr::n_distinct(gene_id), .groups = "drop") %>%
+  dplyr::arrange(desc(nKOs))
+
+test_disp_header <- function(header_name) {
+  kos <- ko_by_header %>% dplyr::filter(header == header_name) %>% dplyr::pull(KOs) %>% .[[1]]
+  mat_h <- func_station[, colnames(func_station) %in% kos |
+                          sub("\\..*$", "", colnames(func_station)) %in% kos, drop = FALSE]
+  if (ncol(mat_h) < 2) return(NULL)
+  d <- vegdist(mat_h, method = "bray")
+  bd_h <- betadisper(d, meta_func$Habitat)
+  pt <- permutest(bd_h, permutations = 9999)
+  means <- tapply(bd_h$distances, meta_func$Habitat, mean)
+  data.frame(
+    header = header_name, nKOs = ncol(mat_h),
+    mean_ST = unname(means["ST"]), mean_T = unname(means["T"]),
+    ratio_T_ST = unname(means["T"] / means["ST"]),
+    F = pt$tab[1, "F"], p = pt$tab[1, "Pr(>F)"]
+  )
+}
+
+disp_by_header <- do.call(rbind, lapply(unique(ko_by_header$header), test_disp_header))
+disp_by_header <- disp_by_header %>%
+  dplyr::mutate(p_fdr = p.adjust(p, method = "BH")) %>%
+  dplyr::arrange(p_fdr)
+
+cat("\n=== Top 15 functional categories by FDR-corrected dispersion difference ===\n")
+print(head(disp_by_header, 15))
+
+drivers <- disp_by_header %>%
+  dplyr::filter(p_fdr < 0.05) %>%
+  dplyr::arrange(desc(ratio_T_ST))
+
+cat("\n=== Significant driver categories (p_fdr < 0.05) ===\n")
+print(drivers)
+
+## -----------------------------
+## STEP 10: Aerobic / anaerobic corrin ring synthesis
+## -----------------------------
+corrin_header <- "aerobic corrin ring synthesis"
+corrin_df <- func_header %>%
+  dplyr::filter(header == corrin_header) %>%
+  dplyr::left_join(meta_func, by = "SampleID")
+
+cat("\n=== aerobic corrin ring synthesis: total abundance by habitat ===\n")
+print(corrin_df)
+
+corrin_wilcox <- wilcox.test(total_abundance ~ Habitat, data = corrin_df)
+cat("\n=== Wilcoxon test: aerobic corrin ring synthesis, Plastic vs Water ===\n")
+print(corrin_wilcox)
+
+anaerobic_corrin_df <- func_header %>%
+  dplyr::filter(header == "anaerobic corrin ring synthesis") %>%
+  dplyr::left_join(meta_func, by = "SampleID")
+
+cat("\n=== anaerobic corrin ring synthesis: total abundance by habitat ===\n")
+print(anaerobic_corrin_df)
+
+if (nrow(anaerobic_corrin_df) > 0 && length(unique(anaerobic_corrin_df$Habitat)) == 2) {
+  anaerobic_corrin_wilcox <- wilcox.test(total_abundance ~ Habitat, data = anaerobic_corrin_df)
+  cat("\n=== Wilcoxon test: anaerobic corrin ring synthesis, Plastic vs Water ===\n")
+  print(anaerobic_corrin_wilcox)
+}
+
+## -----------------------------
+## STEP 11: Save outputs for downstream figure-building / Section 4 drafting
+## -----------------------------
+saveRDS(func_station, "func_station.rds")
+saveRDS(meta_func, "meta_func.rds")
+saveRDS(func_header_mat, "func_header_mat.rds")
+saveRDS(disp_by_header, "disp_by_header.rds")
+saveRDS(drivers, "drivers.rds")
+saveRDS(corrin_df, "corrin_df.rds")
+saveRDS(corrin_wilcox, "corrin_wilcox.rds")
+
+cat("\nDone. Saved: func_station.rds, meta_func.rds, func_header_mat.rds,\n")
+cat("disp_by_header.rds, drivers.rds, corrin_df.rds, corrin_wilcox.rds\n")
+
+## -----------------------------
+## STEP 12: Confirm normalization order
+## Relative abundance must be normalized across all 302 recovered MAGs
+## BEFORE subsetting to the 120 QC-passed MAGs -- not filtered first then
+## renormalized. This block reproduces that order explicitly and compares
+## it against the filter-then-normalize version used above.
+## -----------------------------
+cov_mat_all_302 <- cov_df %>% tibble::column_to_rownames("MAG") %>% as.matrix()
+sample_totals_302 <- colSums(cov_mat_all_302, na.rm = TRUE)
+rel_mat_all_302 <- sweep(cov_mat_all_302, 2, sample_totals_302, FUN = "/")
+
+rel_mat_filt_original_order <- rel_mat_all_302[qc_pass_ids_70, , drop = FALSE]
+cat("\nrel_mat_filt_original_order dim (should be 120 x 14):", dim(rel_mat_filt_original_order), "\n")
+
+cat("\nIdentical to filter-then-normalize version?", identical(rel_mat_filt_original_order, rel_mat_filt), "\n")
+cat("\nSummary of differences (normalize-then-filter minus filter-then-normalize):\n")
+print(summary(as.vector(rel_mat_filt_original_order - rel_mat_filt)))
