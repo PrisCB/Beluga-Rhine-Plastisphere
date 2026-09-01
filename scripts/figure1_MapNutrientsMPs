@@ -1,0 +1,321 @@
+# Required objects (load via readRDS() and assign to these exact names before running):
+#   nut_clean <- readRDS("nut_clean.rds")
+#   (atr_mps_composition.rds is loaded directly within the script)
+#
+# Also requires internet access at runtime: ne_countries()/ne_download() fetch
+# basemap and river-line data from Natural Earth.
+
+library(ggplot2)
+library(sf)
+library(dplyr)
+library(tidyr)
+library(ggrepel)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(ggspatial)
+library(scales)
+library(readxl)
+library(forcats)
+library(cowplot)
+library(conflicted)
+library(ggpattern)
+conflicts_prefer(dplyr::rename, dplyr::mutate, dplyr::filter,
+                 dplyr::summarise, dplyr::group_by, dplyr::select,
+                 .quiet = TRUE)
+
+stations <- data.frame(
+  num  = 1:14,
+  label = sprintf("%02d", 1:14),
+  lat = c(
+    mean(c(51.81469, 51.81503)), mean(c(51.85189, 51.85189)),
+    mean(c(51.86931, 51.86819)), mean(c(51.65819, 51.65858)),
+    mean(c(51.41850, 51.41850)), mean(c(50.98400, 50.98381)),
+    mean(c(50.87356, 50.86981)), mean(c(50.41217, 50.41217)),
+    mean(c(50.19458, 50.19514)), mean(c(49.99617, 49.99858)),
+    mean(c(49.60528, 49.60533)), 48.9775,
+    mean(c(48.48772, 48.48097)), mean(c(47.60956, 47.60478))
+  ),
+  lon = c(
+    mean(c(5.23825, 5.23925)), mean(c(5.85272, 5.85272)),
+    mean(c(6.04881, 6.05211)), mean(c(6.56242, 6.56778)),
+    mean(c(6.73358, 6.73358)), mean(c(6.97922, 6.97906)),
+    mean(c(7.02797, 7.02872)), mean(c(7.48581, 7.48631)),
+    mean(c(7.64528, 7.64517)), mean(c(8.02383, 8.02797)),
+    mean(c(8.40736, 8.40733)), 8.2545,
+    mean(c(7.76652, 7.76614)), mean(c(7.58353, 7.58992))
+  ),
+  type = c("Manta trawl","Manta trawl","Manta trawl","Manta trawl","Manta trawl",
+           "Manta trawl + FTIR-ATR","Manta trawl + FTIR-ATR","Manta trawl + FTIR-ATR",
+           "Manta trawl + FTIR-ATR","Manta trawl + FTIR-ATR","Manta trawl + FTIR-ATR",
+           "Water only","Manta trawl + FTIR-ATR","Manta trawl"),
+  stringsAsFactors = FALSE
+)
+
+stations$type <- factor(stations$type,
+                        levels = c("Manta trawl", "Manta trawl + FTIR-ATR", "Water only"))
+
+type_shape  <- c("Manta trawl" = 24, "Manta trawl + FTIR-ATR" = 24, "Water only" = 21)
+type_fill   <- c("Manta trawl" = "white", "Manta trawl + FTIR-ATR" = "#555555", "Water only" = "white")
+type_colour <- c("Manta trawl" = "black", "Manta trawl + FTIR-ATR" = "black", "Water only" = "black")
+type_size   <- c("Manta trawl" = 2.6, "Manta trawl + FTIR-ATR" = 2.6, "Water only" = 2.4)
+
+world <- ne_countries(scale = "medium", returnclass = "sf")
+focal <- c("Netherlands", "Germany", "France", "Switzerland", "Luxembourg", "Belgium")
+world_focal <- world %>% filter(admin %in% focal)
+world_bg    <- world %>% filter(!admin %in% focal)
+
+rivers <- tryCatch(
+  ne_download(scale = 10, type = "rivers_lake_centerlines", category = "physical", returnclass = "sf"),
+  error = function(e) {
+    ne_download(scale = 50, type = "rivers_lake_centerlines", category = "physical", returnclass = "sf")
+  }
+)
+
+rhine_rivers <- rivers %>%
+  filter(name %in% c("Rhine","Rhein","Rhin","Waal","Lek","Maas","Mosel","Moselle",
+                     "Ruhr","Main","Neckar","Aare","Ill","Lippe","Sieg","Lahn",
+                     "Saar","Nahe","Niers") |
+           grepl("Rhine|Rhein|Rhin|Waal|Maas|Ruhr|Mosel|Neckar|Lippe", name, ignore.case = TRUE))
+
+xlim <- c(3.8, 10.6)
+ylim <- c(47.2, 52.6)
+
+ctry_labels <- data.frame(
+  label = c("NL", "DE", "FR", "LU", "CH", "BE"),
+  lon   = c(5.20,  9.60,  5.30, 6.13,  8.30, 4.50),
+  lat   = c(52.35, 51.20, 47.80, 49.75, 47.45, 50.60)
+)
+
+stations_sf <- st_as_sf(stations, coords = c("lon","lat"), crs = 4326)
+
+fig1_panel_A <- ggplot() +
+  geom_sf(data = world_bg, fill = "#ebebeb", colour = "#c0c0c0", linewidth = 0.15) +
+  geom_sf(data = world_focal, fill = "#f9f9f9", colour = "#555555", linewidth = 0.4) +
+  geom_sf(data = rhine_rivers, colour = "#4292c6", linewidth = 0.55, alpha = 0.85) +
+  geom_sf(data = stations_sf,
+          aes(shape = type, fill = type, colour = type, size = type),
+          stroke = 0.8) +
+  scale_shape_manual(values = type_shape, name = NULL) +
+  scale_fill_manual(values = type_fill, name = NULL) +
+  scale_colour_manual(values = type_colour, name = NULL) +
+  scale_size_manual(values = type_size, name = NULL) +
+  geom_text_repel(
+    data = stations, aes(x = lon, y = lat, label = label),
+    size = 2.3, fontface = "bold", family = "sans", colour = "black",
+    bg.colour = "white", bg.r = 0.12,
+    box.padding = 0.22, point.padding = 0.3,
+    min.segment.length = 0.3, segment.colour = "grey40", segment.size = 0.3,
+    direction = "both", max.overlaps = 20, seed = 42
+  ) +
+  geom_text(data = ctry_labels, aes(x = lon, y = lat, label = label),
+            size = 3.6, fontface = "bold", family = "sans", colour = "#444444") +
+  annotation_scale(location = "br", width_hint = 0.22, text_cex = 0.6, line_width = 0.5) +
+  annotation_north_arrow(location = "tr", pad_x = unit(0.15, "cm"), pad_y = unit(0.4, "cm"),
+                         style = north_arrow_minimal(text_size = 8)) +
+  coord_sf(xlim = xlim, ylim = ylim, expand = FALSE) +
+  theme_void(base_size = 8, base_family = "sans") +
+  theme(
+    panel.border      = element_rect(colour = "black", fill = NA, linewidth = 0.6),
+    panel.background  = element_rect(fill = "#ddeeff", colour = NA),
+    legend.position   = c(0.80, 0.16),
+    legend.direction  = "vertical",
+    legend.background = element_rect(fill = alpha("white", 0.80), colour = "grey60", linewidth = 0.3),
+    legend.margin     = margin(3, 5, 3, 5),
+    legend.key.size   = unit(0.38, "cm"),
+    legend.text       = element_text(size = 6),
+    plot.margin       = margin(4, 4, 4, 4)
+  ) +
+  guides(
+    shape  = guide_legend(override.aes = list(size = 2.4)),
+    fill   = guide_legend(override.aes = list(size = 2.4)),
+    colour = guide_legend(override.aes = list(size = 2.4)),
+    size   = "none"
+  )
+
+station_order <- sprintf("%02d", 1:14)
+
+env_long <- nut_clean %>%
+  pivot_longer(
+    cols = c(NO3NO2, PO4, Si),
+    names_to = "Variable", values_to = "Value"
+  ) %>%
+  mutate(
+    Variable = factor(Variable,
+                      levels = c("NO3NO2", "PO4", "Si"),
+                      labels = c("NO[3]^{'-'}*-NO[2]^{'-'}~(µmol~L^-1)",
+                                 "PO[4]^{'3-'}~(µmol~L^-1)",
+                                 "Si~(µmol~L^-1)")),
+    Station_f = factor(Station, levels = rev(station_order), ordered = TRUE),
+    Station_num = as.numeric(Station)
+  ) %>%
+  filter(!is.na(Value)) %>%
+  arrange(Variable, Station_num)
+
+fig1_panel_B <- ggplot(env_long, aes(x = Value, y = Station_f, group = Variable)) +
+  geom_path(aes(group = Variable), colour = "#2C3E50", linewidth = 0.5, alpha = 0.7) +
+  geom_point(colour = "#2C3E50", size = 1.9) +
+  facet_wrap(~ Variable, scales = "free_x", nrow = 1,
+             labeller = label_parsed) +
+  labs(x = NULL, y = NULL) +
+  theme_classic(base_size = 8, base_family = "sans") +
+  theme(
+    strip.background = element_blank(),
+    strip.text        = element_text(size = 7, face = "italic"),
+    axis.text.y       = element_text(size = 7),
+    axis.text.x       = element_text(size = 6),
+    axis.ticks.y      = element_blank(),
+    axis.line.y       = element_blank(),
+    panel.spacing     = unit(0.3, "cm"),
+    plot.margin       = margin(4, 6, 4, 4)
+  )
+
+props <- readRDS("atr_mps_composition.rds")
+
+stn_order_rev <- rev(sprintf("%02d", 1:14))
+
+n_per_station <- props %>%
+  distinct(station, total) %>%
+  mutate(label = paste0(station, "\n(n=", total, ")"))
+
+full_labels <- sapply(stn_order_rev, function(s) {
+  if (s %in% n_per_station$station) {
+    n_per_station$label[n_per_station$station == s]
+  } else if (s == "12") {
+    "12\n(water only)"
+  } else {
+    s
+  }
+})
+
+props <- props %>%
+  left_join(n_per_station %>% dplyr::select(station, label), by = "station") %>%
+  mutate(
+    station_f = factor(label, levels = full_labels),
+    polymer   = factor(polymer,
+                       levels = c("PE","PP","PET/polyester","PS",
+                                  "PA/nylon","other","unconfirmed*"))
+  )
+
+n_stations_C <- length(levels(droplevels(props$station_f)))
+
+y_positions <- setNames(
+  seq(from = 3.5, to = 10.5, length.out = n_stations_C),
+  levels(droplevels(props$station_f))
+)
+
+props <- props %>%
+  mutate(y_num = y_positions[as.character(station_f)])
+
+polymer_cols <- c(
+  "PE"            = "#00CCCC",
+  "PP"            = "#E91E8C",
+  "PET/polyester" = "#BFD874",
+  "PS"            = "#FFB300",
+  "PA/nylon"      = "#FF6D00",
+  "other"         = "#C8A2C8",
+  "unconfirmed*"  = "#DBD7D2"
+)
+
+polymer_patterns <- c(
+  "PE"            = "circle",
+  "PP"            = "stripe",
+  "PET/polyester" = "stripe",
+  "PS"            = "crosshatch",
+  "PA/nylon"      = "stripe",
+  "other"         = "weave",
+  "unconfirmed*"  = "none"
+)
+
+polymer_pattern_angle <- c(
+  "PE"            = 45,
+  "PP"            = 90,
+  "PA/nylon"      = 0,
+  "PET/polyester" = 0,
+  "PS"            = 45,
+  "other"         = 0,
+  "unconfirmed*"  = 0
+)
+
+polymer_pattern_colour <- c(
+  "PE"            = "#007A7A",
+  "PP"            = "#8C0F52",
+  "PET/polyester" = "#7A9440",
+  "PS"            = "#B37A00",
+  "PA/nylon"      = "#B34D00",
+  "other"         = "#6B4E73",
+  "unconfirmed*"  = "#DBD7D2"
+)
+
+fig1_panel_C <- ggplot(props, aes(x = proportion, y = y_num, fill = polymer,
+                                  pattern = polymer, pattern_angle = polymer,
+                                  pattern_fill = polymer)) +
+  geom_col_pattern(
+    aes(group = station_f),
+    colour = "grey20", linewidth = 0.2,
+    width = 0.6, orientation = "y",
+    pattern_density = 0.05,
+    pattern_spacing = 0.03,
+    pattern_size = 0.09,
+    pattern_key_scale_factor = 0.9
+  ) +
+  scale_pattern_fill_manual(values = polymer_pattern_colour, guide = "none") +
+  geom_text(
+    data = props %>% distinct(station_f, y_num),
+    aes(x = -0.02, y = y_num, label = station_f),
+    inherit.aes = FALSE, hjust = 1, size = 2.3, lineheight = 0.85
+  ) +
+  scale_fill_manual(
+    values = polymer_cols, name = NULL, drop = FALSE,
+    labels = names(polymer_cols)
+  ) +
+  scale_pattern_manual(values = polymer_patterns, name = NULL) +
+  scale_pattern_angle_manual(values = polymer_pattern_angle, guide = "none") +
+  scale_x_continuous(
+    labels = label_percent(accuracy = 1),
+    expand = expansion(mult = c(0.18, 0.02)),
+    breaks = c(0, 0.25, 0.50, 0.75, 1.0)
+  ) +
+  scale_y_continuous(
+    limits = c(0, 14), expand = c(0, 0)
+  ) +
+  labs(x = "ATR-FTIR polymer proportion", y = NULL) +
+  theme_classic(base_size = 8, base_family = "sans") +
+  theme(
+    axis.text.y      = element_blank(),
+    axis.text.x      = element_text(size = 7),
+    axis.title.x     = element_text(size = 8),
+    axis.ticks.y     = element_blank(),
+    axis.line.y      = element_blank(),
+    legend.position  = "bottom",
+    legend.key.size  = unit(0.32, "cm"),
+    legend.text      = element_text(size = 7.0),
+    legend.spacing.x = unit(0.3, "cm"),
+    plot.margin      = margin(5, 10, 5, 0)
+  ) +
+  guides(fill = guide_legend(
+    nrow = 2, byrow = TRUE,
+    override.aes = list(
+      fill   = c("#00CCCC","#E91E8C","#BFD874","#FFB300",
+                 "#FF6D00","#C8A2C8","#DBD7D2"),
+      colour = "grey20"
+    )
+  ))
+
+fig1_panel_C
+
+fig1_beluga <- plot_grid(
+  fig1_panel_A, fig1_panel_B, fig1_panel_C,
+  nrow = 1,
+  align = "h",
+  axis = "tb",
+  labels = c("A", "B", "C"),
+  label_size = 11,
+  label_fontface = "bold",
+  rel_widths = c(1.2, 1.4, 1.0)
+)
+
+ggsave("Figure1_beluga_three_panel.pdf", plot = fig1_beluga, width = 28, height = 16, units = "cm", device = cairo_pdf)
+ggsave("Figure1_beluga_three_panel.png", plot = fig1_beluga, width = 28, height = 16, units = "cm", dpi = 300)
+
+message("Saved: Figure1_beluga_three_panel.pdf / .png")
+
