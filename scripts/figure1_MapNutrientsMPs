@@ -1,9 +1,26 @@
-# Required objects (load via readRDS() and assign to these exact names before running):
-#   nut_clean <- readRDS("nut_clean.rds")
-#   (atr_mps_composition.rds is loaded directly within the script)
-#
-# Also requires internet access at runtime: ne_countries()/ne_download() fetch
-# basemap and river-line data from Natural Earth.
+###############################################################
+# Beluga Project — Figure 1
+# Fig1_PanelA: Map of the 14 Rhine sampling stations (Rotterdam to
+#              Basel), coloured/shaped by sampling type (manta trawl,
+#              manta trawl + ATR-FTIR, water only) -- built with sf/
+#              rnaturalearth basemap and Rhine river-line overlay.
+# Fig1_PanelB: Dissolved nutrient trends (NO3+NO2, PO4, Si) plotted
+#              by station, connected across the transect to show the
+#              longitudinal gradient.
+# Fig1_PanelC: ATR-FTIR polymer composition at the 7 ATR-confirmed
+#              stations, with pattern fills (ggpattern) so polymer
+#              categories remain distinguishable in grayscale.
+###############################################################
+## -----------------------------
+## Required input files (working directory):
+## -----------------------------
+## 1) nut_clean               -- load via readRDS("nut_clean.rds") and
+##                                assign to this exact object name
+## 2) atr_mps_composition.rds -- loaded directly within the script
+## -----------------------------
+## Also requires internet access at runtime: ne_countries()/ne_download()
+## fetch basemap and river-line data from Natural Earth.
+###############################################################
 
 library(ggplot2)
 library(sf)
