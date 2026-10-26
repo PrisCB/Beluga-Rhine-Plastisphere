@@ -21,9 +21,20 @@ Beluga-Rhine-Plastisphere/
 │   ├── beluga_FunctionalAnalysis
 │   ├── figure1_MapNutrientsMPs
 │   ├── figure2_NMDS&envfit
-│   └── figure3_functional_heatmap_corrinoid.R
+│   ├── figure3_functional_heatmap_corrinoid.R
+│   └── mag_coverage_filtering.R
+├── data/
+│   └── metadata/
+│       ├── README.md
+│       ├── mag_qc.csv
+│       ├── mag_metadata_120.csv
+│       ├── sample_metadata.csv
+│       ├── sra_amplicon_accessions.tsv
+│       └── Beluga_MIMARKS_MIMS_MIMAGS_03.09.2026.xlsx
 └── scicore/
-    └── README.md
+    ├── README.md
+    ├── mag_coverage_byMAG_v2.tsv
+    └── contig_to_MAG.tsv
 ```
 
 The `scripts/` directory contains the downstream R analyses and figure-generation code. The `scicore/` documentation describes upstream MAG quality assessment, read mapping and coverage summarisation on the University of Basel sciCORE HPC cluster. The repository's available input data and intermediate objects determine which analyses can be executed directly.
@@ -65,8 +76,14 @@ The figure scripts use derived tables and intermediate R objects from the corres
 
 ## Data availability
 
-Raw sequence data and associated BioSamples are deposited under **NCBI BioProject [PRJNA1506697](https://www.ncbi.nlm.nih.gov/bioproject/PRJNA1506697)**. The manuscript provides accession ranges, sampling details, statistical methods and sample inclusion criteria.
+Amplicon sequencing run accessions and associated BioSample records are documented in `data/metadata/sra_amplicon_accessions.tsv` under **NCBI BioProject [PRJNA1506697](https://www.ncbi.nlm.nih.gov/bioproject/PRJNA1506697)**. The 120 selected MAG assemblies were submitted under genome submission `SUB16390494`; validation and genome accession assignment are pending. Shotgun raw-read SRA accession assignment is not established by the included amplicon accession table.
 
 ## Citation
 
 Carrillo-Barragán P. et al. (2026). *Riverine plastic litter restructures microbial vitamin B12 metabolism and generates functional heterogeneity.* bioRxiv. https://doi.org/10.64898/2026.09.06.749157
+
+
+## Reproducible MAG abundance processing (archived input)
+
+From the repository root, run `Rscript scripts/mag_coverage_filtering.R` (base R only). This imports `scicore/mag_coverage_byMAG_v2.tsv` and `data/metadata/mag_qc.csv`, normalises each sample over **all 302 MAGs**, and exports the archived 120-MAG subset and an eligibility report to `results/mag_processing/`. The 120-MAG identifiers are supplied by `data/metadata/mag_metadata_120.csv`. This script is a reconstruction of verified downstream calculations, not an original sciCORE script.
+
